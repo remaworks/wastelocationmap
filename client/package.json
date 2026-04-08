@@ -11,7 +11,8 @@
     "react-webcam": "^7.0.1"
   },
   "scripts": {
-    "start": "vite"
+    "start": "vite",
+    "build": "vite build"
   },
   "browserslist": {
     "production": [

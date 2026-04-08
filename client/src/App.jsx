@@ -5,7 +5,7 @@ import axios from 'axios';
 import L from 'leaflet';
 import { Camera, MapPin, X, Trash, Edit3, Folder } from 'lucide-react';
 
-const API_URL = "http://localhost:5000";
+const API_URL = "";
 
 export default function App() {
     const webcamRef = useRef(null);
