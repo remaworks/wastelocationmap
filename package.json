@@ -1,0 +1,11 @@
+{
+  "name": "wastelocationmap",
+  "version": "1.0.0",
+  "scripts": {
+    "install-all": "npm install --legacy-peer-deps --prefix client && npm install --legacy-peer-deps --prefix server",
+    "start": "concurrently \"npm start --prefix server\" \"npm start --prefix client\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
