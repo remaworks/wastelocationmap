@@ -15,12 +15,24 @@ export default function App() {
     const [activeLayer, setActiveLayer] = useState('streets');
     const [mapCenter, setMapCenter] = useState([0, 0]);
     const [mapZoom, setMapZoom] = useState(2);
-    const [currentView, setCurrentView] = useState('map'); // 'map' or 'gallery'
+    const [currentView, setCurrentView] = useState('map'); // 'map', 'gallery', 'settings'
     const [tagInput, setTagInput] = useState({});
     const [searchTerm, setSearchTerm] = useState('');
     const [filterDate, setFilterDate] = useState('');
     const [editingReport, setEditingReport] = useState(null);
+    const [linkContext, setLinkContext] = useState(null);
+    const [settings, setSettings] = useState(() => {
+        const saved = localStorage.getItem('remaSettings');
+        return saved ? JSON.parse(saved) : { defaultLayer: 'streets', theme: 'light' };
+    });
     const mapRef = useRef(null);
+
+    useEffect(() => {
+        localStorage.setItem('remaSettings', JSON.stringify(settings));
+        if (settings.defaultLayer && activeLayer !== settings.defaultLayer) {
+            setActiveLayer(settings.defaultLayer);
+        }
+    }, [settings]);
 
     useEffect(() => { fetchReports(); }, []);
 
@@ -31,25 +43,36 @@ export default function App() {
 
     const capture = async () => {
         setLoading(true);
-        navigator.geolocation.getCurrentPosition(async (pos) => {
+        const captureAction = async (lat, lng) => {
             const imageSrc = webcamRef.current.getScreenshot();
-
-            // Convert Base64 to Blob
+            if (!imageSrc) { alert("Camera not ready"); setLoading(false); return; }
             const blob = await fetch(imageSrc).then(res => res.blob());
             const formData = new FormData();
             formData.append('image', blob, 'capture.jpg');
-            formData.append('lat', pos.coords.latitude);
-            formData.append('lng', pos.coords.longitude);
+            formData.append('lat', lat);
+            formData.append('lng', lng);
             formData.append('tags', JSON.stringify(["Mobile-Report"]));
+            if (linkContext) {
+                formData.append('status', 'After');
+                formData.append('linkedToId', linkContext.id);
+                formData.append('folder', linkContext.folder || '');
+            }
 
             await axios.post(`${API_URL}/api/reports`, formData);
+            setLinkContext(null);
             fetchReports();
             setLoading(false);
             setIsCameraOpen(false);
-        }, () => {
-            alert("GPS Required!");
-            setLoading(false);
-        });
+        };
+
+        if (linkContext) {
+            await captureAction(linkContext.lat, linkContext.lng);
+        } else {
+            navigator.geolocation.getCurrentPosition(
+                async (pos) => await captureAction(pos.coords.latitude, pos.coords.longitude),
+                () => { alert("GPS Required!"); setLoading(false); }
+            );
+        }
     };
 
     const updateTags = async (id, currentTags, newTag) => {
@@ -101,6 +124,7 @@ export default function App() {
     };
 
     const groupedReports = reports
+        .filter(r => r.status !== 'After') // Only main card for "Before"
         .filter(r => {
             const matchesSearch = (r.title || '').toLowerCase().includes(searchTerm.toLowerCase()) || 
                                  (r.description || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -111,9 +135,31 @@ export default function App() {
         .reduce((acc, r) => {
             const folder = r.folder || 'Uncategorized';
             if (!acc[folder]) acc[folder] = [];
+            
+            // Attach nested after photos
+            r.afterPhotos = reports.filter(after => after.linkedToId === r._id);
+            
             acc[folder].push(r);
             return acc;
         }, {});
+
+    const redIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
+
+    const greenIcon = new L.Icon({
+        iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-green.png',
+        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+        iconSize: [25, 41],
+        iconAnchor: [12, 41],
+        popupAnchor: [1, -34],
+        shadowSize: [41, 41]
+    });
 
     const focusMapOn = (lat, lng) => {
         if (mapRef.current) {
@@ -131,11 +177,53 @@ export default function App() {
                 <div style={{ display: 'flex', gap: '10px' }}>
                     <button style={currentView === 'map' ? toggleBtnActive : toggleBtn} onClick={() => { setCurrentView('map'); setTimeout(() => mapRef.current?.invalidateSize(), 100); }}>Map View</button>
                     <button style={currentView === 'gallery' ? toggleBtnActive : toggleBtn} onClick={() => setCurrentView('gallery')}>Gallery</button>
+                    <button style={currentView === 'settings' ? toggleBtnActive : toggleBtn} onClick={() => setCurrentView('settings')}>Settings</button>
                 </div>
                 <span>{reports.length} Points Active</span>
             </header>
 
             <div style={{ position: 'relative', flex: 1, overflow: 'hidden' }}>
+                {/* SETTINGS VIEW */}
+                <div style={{ position: 'absolute', inset: 0, opacity: currentView === 'settings' ? 1 : 0, pointerEvents: currentView === 'settings' ? 'auto' : 'none', zIndex: currentView === 'settings' ? 20 : 1, background: '#f1f5f9', overflowY: 'auto', padding: '2rem' }}>
+                    <div style={{ maxWidth: '600px', margin: '0 auto', background: 'white', padding: '2rem', borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}>
+                        <h2 style={{ marginTop: 0 }}>Application Settings</h2>
+                        <hr style={{ border: 'none', borderBottom: '1px solid #e2e8f0', margin: '1.5rem 0' }} />
+                        
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={labelStyle}>Default Map Layer</label>
+                            <select 
+                                style={inputStyle} 
+                                value={settings.defaultLayer} 
+                                onChange={e => setSettings({...settings, defaultLayer: e.target.value})}
+                            >
+                                <option value="streets">OpenStreetMap (Streets)</option>
+                                <option value="satellite">Esri World Imagery (Satellite)</option>
+                                <option value="dark">Carto Dark (Night Mode)</option>
+                            </select>
+                        </div>
+
+                        <div style={{ marginBottom: '1.5rem' }}>
+                            <label style={labelStyle}>Interface Theme</label>
+                            <select 
+                                style={inputStyle} 
+                                value={settings.theme} 
+                                onChange={e => setSettings({...settings, theme: e.target.value})}
+                            >
+                                <option value="light">Fresh Light</option>
+                                <option value="dark">Pro Dark (Coming Soon)</option>
+                            </select>
+                        </div>
+
+                        <div style={{ padding: '1.5rem', background: '#fff1f2', borderRadius: '8px', border: '1px solid #fecaca' }}>
+                            <h4 style={{ margin: '0 0 0.5rem 0', color: '#991b1b' }}>Danger Zone</h4>
+                            <p style={{ fontSize: '0.85rem', color: '#b91c1c', marginBottom: '1rem' }}>Deleting all data is permanent and cannot be undone.</p>
+                            <button 
+                                onClick={() => { if(window.confirm("Delete ALL reports? This is permanent.")) alert("Feature restricted for local safety. Wipe server/data.json manually."); }}
+                                style={{ background: '#ef4444', color: 'white', border: 'none', padding: '8px 16px', borderRadius: '4px', fontWeight: 'bold', cursor: 'pointer' }}
+                            >Reset Project Data</button>
+                        </div>
+                    </div>
+                </div>
                 {/* MAP VIEW */}
                 <div style={{ position: 'absolute', inset: 0, opacity: currentView === 'map' ? 1 : 0, pointerEvents: currentView === 'map' ? 'auto' : 'none', zIndex: currentView === 'map' ? 10 : 1 }}>
                     <div style={layerSwitcherStyle}>
@@ -150,25 +238,35 @@ export default function App() {
                             activeLayer === 'satellite' ? "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" :
                             "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
                         } />
-                        {reports.map(r => (
-                            <Marker 
-                                key={r._id} 
-                                position={[r.lat, r.lng]}
-                                eventHandlers={{
-                                    click: () => {
-                                        setCurrentView('gallery');
-                                        setEditingReport(r);
-                                    }
-                                }}
-                            >
-                                <Tooltip>
-                                    <div style={{ textAlign: 'center' }}>
-                                        <img src={r.imageUrl} style={{ width: '120px', borderRadius: '4px', marginBottom: '4px' }} /><br />
-                                        <span>{r.title || 'Untitled'} ({(r.tags || []).length} Tags)</span>
-                                    </div>
-                                </Tooltip>
-                            </Marker>
-                        ))}
+                        {reports.filter(r => r.status !== 'After').map(r => {
+                            const hasAfter = reports.some(after => after.linkedToId === r._id);
+                            return (
+                                <Marker 
+                                    key={r._id} 
+                                    position={[r.lat, r.lng]}
+                                    icon={hasAfter ? greenIcon : redIcon}
+                                    eventHandlers={{
+                                        click: () => {
+                                            setCurrentView('gallery');
+                                            setEditingReport(r);
+                                        }
+                                    }}
+                                >
+                                    <Tooltip>
+                                        <div style={{ textAlign: 'center' }}>
+                                            <div style={{ display: 'flex', gap: '4px' }}>
+                                                <img src={r.imageUrl} style={{ width: '150px', borderRadius: '4px' }} />
+                                                {hasAfter && <img src={reports.find(after => after.linkedToId === r._id).imageUrl} style={{ width: '150px', borderRadius: '4px' }} />}
+                                            </div>
+                                            <div style={{ marginTop: '8px' }}>
+                                                <b style={{ fontSize: '1rem' }}>{r.title || 'Report Site'}</b><br />
+                                                {hasAfter ? '✅ Before & After Linked' : '🔴 Awaiting Progress'}
+                                            </div>
+                                        </div>
+                                    </Tooltip>
+                                </Marker>
+                            );
+                        })}
                     </MapContainer>
                 </div>
 
@@ -215,26 +313,40 @@ export default function App() {
                             </h3>
                             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem', marginTop: '1rem' }}>
                                 {folderReports.map(r => (
-                                    <div style={galleryCardStyle}>
-                                        <div style={{ position: 'relative' }}>
-                                            <img src={r.imageUrl} onClick={() => setEditingReport(r)} style={{ width: '100%', height: '220px', objectFit: 'cover', borderRadius: '6px', cursor: 'pointer' }} title="Click to edit" />
-                                            <div style={{ position: 'absolute', top: 10, right: 10, display: 'flex', gap: '8px', pointerEvents: 'none' }}>
-                                                <button onClick={(e) => { e.stopPropagation(); setEditingReport(r); }} style={{...iconBtnStyle, pointerEvents: 'auto'}} title="Edit"><Edit3 size={16} /></button>
-                                                <button onClick={(e) => { e.stopPropagation(); deleteReport(r._id); }} style={{ ...iconBtnStyle, color: '#ef4444', pointerEvents: 'auto' }} title="Delete"><Trash size={16} /></button>
+                                    <div key={r._id} style={galleryCardStyle}>
+                                        <div style={{ display: 'flex', gap: '10px' }}>
+                                            <div style={{ flex: 1, position: 'relative' }}>
+                                                <img src={r.imageUrl} onClick={() => setEditingReport(r)} style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '6px', cursor: 'pointer' }} title="Before Photo" />
+                                                <span style={badgeStyle}>BEFORE</span>
+                                                <div style={{ position: 'absolute', top: 5, right: 5, display: 'flex', gap: '4px', pointerEvents: 'none' }}>
+                                                    <button onClick={(e) => { e.stopPropagation(); setEditingReport(r); }} style={{...iconBtnStyle, padding: '4px', pointerEvents: 'auto'}} title="Edit"><Edit3 size={14} /></button>
+                                                    <button onClick={(e) => { e.stopPropagation(); deleteReport(r._id); }} style={{ ...iconBtnStyle, color: '#ef4444', padding: '4px', pointerEvents: 'auto' }} title="Delete"><Trash size={14} /></button>
+                                                </div>
                                             </div>
+                                            {r.afterPhotos && r.afterPhotos.length > 0 ? (
+                                                <div style={{ flex: 1, position: 'relative' }}>
+                                                    <img src={r.afterPhotos[0].imageUrl} onClick={() => setEditingReport(r.afterPhotos[0])} style={{ width: '100%', height: '180px', objectFit: 'cover', borderRadius: '6px', cursor: 'pointer', border: '2px solid #10b981' }} title="After Photo" />
+                                                    <span style={{...badgeStyle, background: '#10b981'}}>AFTER</span>
+                                                    <div style={{ position: 'absolute', top: 5, right: 5, display: 'flex', gap: '4px', pointerEvents: 'none' }}>
+                                                        <button onClick={(e) => { e.stopPropagation(); deleteReport(r.afterPhotos[0]._id); }} style={{ ...iconBtnStyle, color: '#ef4444', padding: '4px', pointerEvents: 'auto' }} title="Delete"><Trash size={14} /></button>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div style={{ flex: 1, height: '180px', background: '#f1f5f9', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center', border: '2px dashed #cbd5e1' }}>
+                                                    <button 
+                                                        onClick={() => { setLinkContext({ id: r._id, lat: r.lat, lng: r.lng, folder: r.folder }); setIsCameraOpen(true); }}
+                                                        style={{ background: '#0ea5e9', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '4px', fontSize: '0.8rem', cursor: 'pointer' }}
+                                                    >+ Add After Photo</button>
+                                                </div>
+                                            )}
                                         </div>
-                                        <div style={{ padding: '1rem 0 0 0' }}>
-                                            <h4 style={{ margin: '0 0 0.5rem 0', color: '#0f172a' }}>{r.title || 'Untitled Image'}</h4>
-                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                                                <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>
-                                                    {new Date(r.timestamp).toLocaleString()}
+                                        <div style={{ padding: '0.75rem 0 0 0' }}>
+                                            <h4 style={{ margin: '0 0 0.25rem 0', color: '#0f172a' }}>{r.title || 'Untitled Site'}</h4>
+                                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                                <p style={{ margin: 0, fontSize: '0.75rem', color: '#64748b' }}>
+                                                    {new Date(r.timestamp).toLocaleDateString()}
                                                 </p>
-                                                <button onClick={() => viewOnMap(r.lat, r.lng)} style={viewMapBtn} title="View on map"><MapPin size={16} /> View Map</button>
-                                            </div>
-                                            <div style={tagContainerStyle}>
-                                                {(r.tags || []).map((t, idx) => (
-                                                    <span key={idx} style={tagChipStyle}>{t}</span>
-                                                ))}
+                                                <button onClick={() => viewOnMap(r.lat, r.lng)} style={viewMapBtn} title="View on map"><MapPin size={14} /> Center Map</button>
                                             </div>
                                         </div>
                                     </div>
@@ -350,8 +462,9 @@ const viewMapBtn = { background: '#f1f5f9', color: '#334155', border: 'none', pa
 const toggleBtn = { background: 'transparent', color: '#cbd5e1', border: '1px solid #cbd5e1', padding: '6px 16px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', outline: 'none', transition: 'all 0.2s' };
 const toggleBtnActive = { background: 'white', color: '#064e3b', border: '1px solid white', padding: '6px 16px', borderRadius: '20px', cursor: 'pointer', fontWeight: 'bold', outline: 'none' };
 const iconBtnStyle = { background: 'rgba(255,255,255,0.9)', color: '#334155', border: 'none', padding: '6px', borderRadius: '4px', cursor: 'pointer', display: 'flex', boxShadow: '0 2px 4px rgba(0,0,0,0.1)', transition: 'background 0.2s' };
-const modalOverlayStyle = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' };
-const modalContentStyle = { background: '#f8fafc', padding: '2rem', borderRadius: '12px', width: '100%', maxWidth: '800px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' };
+const badgeStyle = { position: 'absolute', bottom: '8px', left: '8px', background: '#ef4444', color: 'white', fontSize: '0.65rem', fontWeight: 'bold', padding: '2px 6px', borderRadius: '4px' };
+const modalOverlayStyle = { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem' };
+const modalContentStyle = { background: '#f8fafc', padding: '1.5rem', borderRadius: '12px', width: '100%', maxWidth: '900px', maxHeight: '95vh', overflowY: 'auto', boxShadow: '0 10px 25px rgba(0,0,0,0.2)' };
 const inputStyle = { width: '100%', padding: '10px', boxSizing: 'border-box', border: '1px solid #cbd5e1', borderRadius: '6px', fontFamily: 'inherit', fontSize: '1rem' };
 const labelStyle = { display: 'block', fontSize: '0.85rem', fontWeight: '600', color: '#475569', marginBottom: '0.25rem' };
 const saveModalBtn = { background: '#0ea5e9', color: 'white', border: 'none', padding: '10px 24px', borderRadius: '6px', cursor: 'pointer', fontWeight: 'bold', fontSize: '1rem' };

@@ -43,14 +43,16 @@ app.get('/api/reports', (req, res) => {
 });
 
 app.post('/api/reports', upload.single('image'), (req, res) => {
-    const { lat, lng, tags } = req.body;
+    const { lat, lng, tags, linkedToId, status } = req.body;
     const newReport = {
         _id: Date.now().toString(),
         lat: parseFloat(lat),
         lng: parseFloat(lng),
         imageUrl: `http://localhost:5000/uploads/${req.file.filename}`,
         tags: JSON.parse(tags || "[]"),
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        status: status || 'Before',
+        linkedToId: linkedToId || null
     };
     reports.push(newReport);
     saveReports();
